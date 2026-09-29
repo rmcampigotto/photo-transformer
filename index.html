@@ -14,6 +14,7 @@
       --bar: #fff;
       --tap: 52px;
       --safe: env(safe-area-inset-bottom, 0px);
+      --err: #ff6b6b;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
@@ -38,8 +39,31 @@
       letter-spacing: -0.02em;
       color: var(--fg);
     }
+    .screen { display: none; width: min(100%, 320px); flex-direction: column; align-items: stretch; gap: 16px; }
+    .screen.active { display: flex; }
+    .field { display: flex; flex-direction: column; gap: 8px; }
+    .field label { font-size: 0.8rem; color: var(--muted); }
+    .field input {
+      min-height: var(--tap);
+      width: 100%;
+      border: 1.5px solid #333;
+      border-radius: 12px;
+      background: #111;
+      color: var(--fg);
+      font-size: 1rem;
+      padding: 0 14px;
+      outline: none;
+      -webkit-appearance: none;
+    }
+    .field input:focus { border-color: #666; }
+    .error {
+      font-size: 0.85rem;
+      color: var(--err);
+      text-align: center;
+      min-height: 1.2em;
+    }
     .preview {
-      width: min(100%, 320px);
+      width: 100%;
       aspect-ratio: 1;
       background: #111;
       border-radius: 12px;
@@ -54,7 +78,7 @@
       display: block;
     }
     .progress {
-      width: min(100%, 320px);
+      width: 100%;
       height: 4px;
       background: #222;
       border-radius: 2px;
@@ -72,7 +96,7 @@
       display: flex;
       flex-direction: column;
       gap: 12px;
-      width: min(100%, 320px);
+      width: 100%;
     }
     .btn {
       min-height: var(--tap);
@@ -88,6 +112,10 @@
     }
     .btn:active { opacity: 0.85; }
     .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    .btn-primary {
+      background: var(--fg);
+      color: var(--bg);
+    }
     .btn-upload {
       background: var(--fg);
       color: var(--bg);
@@ -100,6 +128,21 @@
     .btn-download:not(:disabled) {
       border-color: var(--fg);
     }
+    .btn-ghost {
+      background: transparent;
+      color: var(--muted);
+      font-size: 0.9rem;
+      font-weight: 500;
+      min-height: 40px;
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      gap: 12px;
+    }
+    .topbar h1 { flex: 1; text-align: center; }
     .hint {
       font-size: 0.8rem;
       color: var(--muted);
@@ -117,23 +160,45 @@
   </style>
 </head>
 <body>
-  <h1>photo-transformer</h1>
-
-  <div class="preview" id="preview" aria-hidden="true">
-    <img id="previewImg" alt="Pré-visualização 1200×1200" />
+  <div class="screen" id="loginScreen">
+    <h1>photo-transformer</h1>
+    <form id="loginForm" class="actions" autocomplete="on">
+      <div class="field">
+        <label for="userInput">Usuário</label>
+        <input id="userInput" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required />
+      </div>
+      <div class="field">
+        <label for="passInput">Senha</label>
+        <input id="passInput" name="password" type="password" autocomplete="current-password" required />
+      </div>
+      <p class="error" id="loginError" aria-live="polite"></p>
+      <button type="submit" class="btn btn-primary" id="btnLogin">Entrar</button>
+    </form>
   </div>
 
-  <div class="progress" id="progress" aria-hidden="true" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-    <div class="progress-bar" id="progressBar"></div>
-  </div>
+  <div class="screen" id="appScreen">
+    <div class="topbar">
+      <span style="width:48px"></span>
+      <h1>photo-transformer</h1>
+      <button type="button" class="btn btn-ghost" id="btnLogout" style="width:auto;padding:0 8px">Sair</button>
+    </div>
 
-  <div class="actions">
-    <input type="file" id="fileInput" class="hidden-input" accept="image/*" />
-    <button type="button" class="btn btn-upload" id="btnUpload">Upload</button>
-    <button type="button" class="btn btn-download" id="btnDownload" disabled>Download</button>
-  </div>
+    <div class="preview" id="preview" aria-hidden="true">
+      <img id="previewImg" alt="Pré-visualização 1200×1200" />
+    </div>
 
-  <p class="hint" id="hint">1200×1200 · corte central</p>
+    <div class="progress" id="progress" aria-hidden="true" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+      <div class="progress-bar" id="progressBar"></div>
+    </div>
+
+    <div class="actions">
+      <input type="file" id="fileInput" class="hidden-input" accept="image/*" />
+      <button type="button" class="btn btn-upload" id="btnUpload">Upload</button>
+      <button type="button" class="btn btn-download" id="btnDownload" disabled>Download</button>
+    </div>
+
+    <p class="hint" id="hint">1200×1200 · corte central</p>
+  </div>
 
   <script>
 (function () {
@@ -141,6 +206,15 @@
 
   var SIZE = 1200;
   var JPEG_QUALITY = 0.92;
+  var SESSION_KEY = "pt_auth";
+  var USER = "admin";
+  var PASS = "rmcampigotto@123";
+
+  var loginScreen = document.getElementById("loginScreen");
+  var appScreen = document.getElementById("appScreen");
+  var loginForm = document.getElementById("loginForm");
+  var loginError = document.getElementById("loginError");
+  var btnLogout = document.getElementById("btnLogout");
 
   var fileInput = document.getElementById("fileInput");
   var btnUpload = document.getElementById("btnUpload");
@@ -154,6 +228,51 @@
   var resultBlob = null;
   var resultUrl = null;
   var resultName = "photo-1200x1200.jpg";
+
+  function showLogin() {
+    loginScreen.classList.add("active");
+    appScreen.classList.remove("active");
+    loginError.textContent = "";
+  }
+
+  function showApp() {
+    loginScreen.classList.remove("active");
+    appScreen.classList.add("active");
+  }
+
+  function isAuthed() {
+    try { return sessionStorage.getItem(SESSION_KEY) === "1"; } catch (e) { return false; }
+  }
+
+  function setAuthed(on) {
+    try {
+      if (on) sessionStorage.setItem(SESSION_KEY, "1");
+      else sessionStorage.removeItem(SESSION_KEY);
+    } catch (e) {}
+  }
+
+  if (isAuthed()) showApp();
+  else showLogin();
+
+  loginForm.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var u = (document.getElementById("userInput").value || "").trim();
+    var p = document.getElementById("passInput").value || "";
+    if (u === USER && p === PASS) {
+      setAuthed(true);
+      loginError.textContent = "";
+      document.getElementById("passInput").value = "";
+      showApp();
+    } else {
+      loginError.textContent = "Usuário ou senha incorretos";
+    }
+  });
+
+  btnLogout.addEventListener("click", function () {
+    setAuthed(false);
+    clearResult();
+    showLogin();
+  });
 
   btnUpload.addEventListener("click", function () {
     fileInput.click();
