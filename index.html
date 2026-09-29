@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#000000" />
+  <title>photo-transformer</title>
+  <style>
+    :root {
+      --bg: #000;
+      --fg: #fff;
+      --muted: #888;
+      --bar: #fff;
+      --tap: 52px;
+      --safe: env(safe-area-inset-bottom, 0px);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      min-height: 100%;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      -webkit-text-size-adjust: 100%;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100dvh;
+      padding: 24px 20px calc(24px + var(--safe));
+      gap: 20px;
+    }
+    h1 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      color: var(--fg);
+    }
+    .preview {
+      width: min(100%, 320px);
+      aspect-ratio: 1;
+      background: #111;
+      border-radius: 12px;
+      overflow: hidden;
+      display: none;
+    }
+    .preview.visible { display: block; }
+    .preview img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+    .progress {
+      width: min(100%, 320px);
+      height: 4px;
+      background: #222;
+      border-radius: 2px;
+      overflow: hidden;
+      display: none;
+    }
+    .progress.visible { display: block; }
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      background: var(--bar);
+      transition: width 0.2s ease;
+    }
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      width: min(100%, 320px);
+    }
+    .btn {
+      min-height: var(--tap);
+      width: 100%;
+      border: none;
+      border-radius: 12px;
+      font-size: 1.05rem;
+      font-weight: 600;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+      user-select: none;
+    }
+    .btn:active { opacity: 0.85; }
+    .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    .btn-upload {
+      background: var(--fg);
+      color: var(--bg);
+    }
+    .btn-download {
+      background: transparent;
+      color: var(--fg);
+      border: 1.5px solid #444;
+    }
+    .btn-download:not(:disabled) {
+      border-color: var(--fg);
+    }
+    .hint {
+      font-size: 0.8rem;
+      color: var(--muted);
+      text-align: center;
+      min-height: 1.2em;
+    }
+    .hidden-input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+    }
+  </style>
+</head>
+<body>
+  <h1>photo-transformer</h1>
+
+  <div class="preview" id="preview" aria-hidden="true">
+    <img id="previewImg" alt="Pré-visualização 1200×1200" />
+  </div>
+
+  <div class="progress" id="progress" aria-hidden="true" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+    <div class="progress-bar" id="progressBar"></div>
+  </div>
+
+  <div class="actions">
+    <input type="file" id="fileInput" class="hidden-input" accept="image/*" />
+    <button type="button" class="btn btn-upload" id="btnUpload">Upload</button>
+    <button type="button" class="btn btn-download" id="btnDownload" disabled>Download</button>
+  </div>
+
+  <p class="hint" id="hint">1200×1200 · corte central</p>
+
+  <script>
+(function () {
+  "use strict";
+
+  var SIZE = 1200;
+  var JPEG_QUALITY = 0.92;
+
+  var fileInput = document.getElementById("fileInput");
+  var btnUpload = document.getElementById("btnUpload");
+  var btnDownload = document.getElementById("btnDownload");
+  var preview = document.getElementById("preview");
+  var previewImg = document.getElementById("previewImg");
+  var progress = document.getElementById("progress");
+  var progressBar = document.getElementById("progressBar");
+  var hint = document.getElementById("hint");
+
+  var resultBlob = null;
+  var resultUrl = null;
+  var resultName = "photo-1200x1200.jpg";
+
+  btnUpload.addEventListener("click", function () {
+    fileInput.click();
+  });
+
+  fileInput.addEventListener("change", function () {
+    var file = fileInput.files && fileInput.files[0];
+    fileInput.value = "";
+    if (file) processFile(file);
+  });
+
+  btnDownload.addEventListener("click", function () {
+    if (!resultBlob) return;
+    var a = document.createElement("a");
+    a.href = resultUrl;
+    a.download = resultName;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  });
+
+  function setProgress(pct, show) {
+    if (show) {
+      progress.classList.add("visible");
+      progress.setAttribute("aria-hidden", "false");
+    } else {
+      progress.classList.remove("visible");
+      progress.setAttribute("aria-hidden", "true");
+    }
+    var n = Math.max(0, Math.min(100, Math.round(pct)));
+    progressBar.style.width = n + "%";
+    progress.setAttribute("aria-valuenow", String(n));
+  }
+
+  function clearResult() {
+    if (resultUrl) URL.revokeObjectURL(resultUrl);
+    resultBlob = null;
+    resultUrl = null;
+    previewImg.removeAttribute("src");
+    preview.classList.remove("visible");
+    preview.setAttribute("aria-hidden", "true");
+    btnDownload.disabled = true;
+  }
+
+  function baseName(name) {
+    var n = name || "photo";
+    var i = n.lastIndexOf(".");
+    return i > 0 ? n.slice(0, i) : n;
+  }
+
+  function loadOriented(blob) {
+    if (typeof createImageBitmap === "function") {
+      return createImageBitmap(blob, { imageOrientation: "from-image" }).catch(function () {
+        return createImageBitmap(blob).catch(function () {
+          return loadViaImage(blob);
+        });
+      });
+    }
+    return loadViaImage(blob);
+  }
+
+  function loadViaImage(blob) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(blob);
+      var img = new Image();
+      img.onload = function () {
+        URL.revokeObjectURL(url);
+        resolve(img);
+      };
+      img.onerror = function () {
+        URL.revokeObjectURL(url);
+        reject(new Error("Falha ao carregar"));
+      };
+      img.src = url;
+    });
+  }
+
+  function cropToSquare(source) {
+    var sw = source.width;
+    var sh = source.height;
+    if (!sw || !sh) throw new Error("Dimensões inválidas");
+    var side = Math.min(sw, sh);
+    var sx = Math.floor((sw - side) / 2);
+    var sy = Math.floor((sh - side) / 2);
+    var canvas = document.createElement("canvas");
+    canvas.width = SIZE;
+    canvas.height = SIZE;
+    var ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas indisponível");
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(source, sx, sy, side, side, 0, 0, SIZE, SIZE);
+    return canvas;
+  }
+
+  function canvasToBlob(canvas) {
+    return new Promise(function (resolve, reject) {
+      if (canvas.toBlob) {
+        canvas.toBlob(function (blob) {
+          if (blob) resolve(blob);
+          else reject(new Error("toBlob falhou"));
+        }, "image/jpeg", JPEG_QUALITY);
+      } else {
+        try {
+          var dataUrl = canvas.toDataURL("image/jpeg", JPEG_QUALITY);
+          var parts = dataUrl.split(",");
+          var bin = atob(parts[1]);
+          var arr = new Uint8Array(bin.length);
+          for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+          resolve(new Blob([arr], { type: "image/jpeg" }));
+        } catch (e) {
+          reject(e);
+        }
+      }
+    });
+  }
+
+  async function processFile(file) {
+    clearResult();
+    btnUpload.disabled = true;
+    hint.textContent = "Processando…";
+    setProgress(8, true);
+
+    var source = null;
+    try {
+      setProgress(25, true);
+      source = await loadOriented(file);
+      setProgress(55, true);
+      var canvas = cropToSquare(source);
+      setProgress(75, true);
+      var blob = await canvasToBlob(canvas);
+      setProgress(100, true);
+
+      resultBlob = blob;
+      resultUrl = URL.createObjectURL(blob);
+      resultName = baseName(file.name) + "-1200x1200.jpg";
+
+      previewImg.src = resultUrl;
+      preview.classList.add("visible");
+      preview.setAttribute("aria-hidden", "false");
+      btnDownload.disabled = false;
+      hint.textContent = "Pronto · 1200×1200";
+    } catch (err) {
+      console.error(err);
+      hint.textContent = "Erro ao processar a imagem";
+      clearResult();
+    } finally {
+      if (source && typeof source.close === "function") {
+        try { source.close(); } catch (e) {}
+      }
+      btnUpload.disabled = false;
+      setTimeout(function () { setProgress(0, false); }, 400);
+    }
+  }
+})();
+  </script>
+</body>
+</html>
