@@ -120,6 +120,14 @@
       background: var(--fg);
       color: var(--bg);
     }
+    .btn-drive {
+      background: transparent;
+      color: var(--fg);
+      border: 1.5px solid #444;
+    }
+    .btn-drive.connected {
+      border-color: var(--fg);
+    }
     .btn-download {
       background: transparent;
       color: var(--fg);
@@ -157,7 +165,50 @@
       overflow: hidden;
       clip: rect(0, 0, 0, 0);
     }
+    .drive-list {
+      display: none;
+      max-height: 220px;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      border: 1.5px solid #333;
+      border-radius: 12px;
+      background: #111;
+    }
+    .drive-list.visible { display: block; }
+    .drive-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      min-height: 48px;
+      padding: 8px 12px;
+      border: none;
+      border-bottom: 1px solid #222;
+      background: transparent;
+      color: var(--fg);
+      font-size: 0.9rem;
+      text-align: left;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+    .drive-item:last-child { border-bottom: none; }
+    .drive-item:active { background: #1a1a1a; }
+    .drive-item img {
+      width: 36px;
+      height: 36px;
+      border-radius: 6px;
+      object-fit: cover;
+      background: #222;
+      flex-shrink: 0;
+    }
+    .drive-item span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
   </style>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
   <div class="screen" id="loginScreen">
@@ -191,9 +242,12 @@
       <div class="progress-bar" id="progressBar"></div>
     </div>
 
+    <div class="drive-list" id="driveList" aria-label="Arquivos do Drive"></div>
+
     <div class="actions">
       <input type="file" id="fileInput" class="hidden-input" accept="image/*" />
       <button type="button" class="btn btn-upload" id="btnUpload">Upload</button>
+      <button type="button" class="btn btn-drive" id="btnDrive">Conectar Drive</button>
       <button type="button" class="btn btn-download" id="btnDownload" disabled>Download</button>
     </div>
 
@@ -207,8 +261,11 @@
   var SIZE = 1200;
   var JPEG_QUALITY = 0.92;
   var SESSION_KEY = "pt_auth";
+  var DRIVE_TOKEN_KEY = "pt_drive_token";
   var USER = "admin";
   var PASS = "rmcampigotto@123";
+  var GOOGLE_CLIENT_ID = "440396226410-dmmt5bh0r93atn83hoq3bee0d09ejkg8.apps.googleusercontent.com";
+  var DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 
   var loginScreen = document.getElementById("loginScreen");
   var appScreen = document.getElementById("appScreen");
@@ -218,16 +275,21 @@
 
   var fileInput = document.getElementById("fileInput");
   var btnUpload = document.getElementById("btnUpload");
+  var btnDrive = document.getElementById("btnDrive");
   var btnDownload = document.getElementById("btnDownload");
   var preview = document.getElementById("preview");
   var previewImg = document.getElementById("previewImg");
   var progress = document.getElementById("progress");
   var progressBar = document.getElementById("progressBar");
   var hint = document.getElementById("hint");
+  var driveList = document.getElementById("driveList");
 
   var resultBlob = null;
   var resultUrl = null;
   var resultName = "photo-1200x1200.jpg";
+  var driveAccessToken = null;
+  var tokenClient = null;
+  var busy = false;
 
   function showLogin() {
     loginScreen.classList.add("active");
@@ -251,6 +313,232 @@
     } catch (e) {}
   }
 
+  function loadStoredToken() {
+    try {
+      var t = sessionStorage.getItem(DRIVE_TOKEN_KEY);
+      if (t) driveAccessToken = t;
+    } catch (e) {}
+  }
+
+  function storeToken(token) {
+    driveAccessToken = token || null;
+    try {
+      if (token) sessionStorage.setItem(DRIVE_TOKEN_KEY, token);
+      else sessionStorage.removeItem(DRIVE_TOKEN_KEY);
+    } catch (e) {}
+  }
+
+  function updateDriveButton() {
+    if (driveAccessToken) {
+      btnDrive.textContent = "Do Drive";
+      btnDrive.classList.add("connected");
+    } else {
+      btnDrive.textContent = "Conectar Drive";
+      btnDrive.classList.remove("connected");
+      hideDriveList();
+    }
+  }
+
+  function hideDriveList() {
+    driveList.classList.remove("visible");
+    driveList.innerHTML = "";
+  }
+
+  function authErrorHint(err) {
+    var msg = (err && (err.error || err.message || err.type)) || "";
+    msg = String(msg).toLowerCase();
+    if (msg.indexOf("popup_closed") !== -1 || msg.indexOf("popup_closed_by_user") !== -1) {
+      return "Login cancelado";
+    }
+    if (msg.indexOf("access_denied") !== -1) {
+      return "Acesso negado. Verifique permissões no Google";
+    }
+    if (msg.indexOf("idpiframe_initialization_failed") !== -1 || msg.indexOf("origin") !== -1) {
+      return "Origem não autorizada no Google Cloud";
+    }
+    if (msg.indexOf("immediate_failed") !== -1) {
+      return "Sessão Google expirada. Conecte novamente";
+    }
+    return "Falha na autenticação Google";
+  }
+
+  function ensureTokenClient() {
+    if (tokenClient) return true;
+    if (!window.google || !google.accounts || !google.accounts.oauth2) {
+      hint.textContent = "Google Identity ainda carregando…";
+      return false;
+    }
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: GOOGLE_CLIENT_ID,
+      scope: DRIVE_SCOPE,
+      callback: function (resp) {
+        if (resp && resp.error) {
+          console.error(resp);
+          hint.textContent = authErrorHint(resp);
+          return;
+        }
+        if (!resp || !resp.access_token) {
+          hint.textContent = "Falha na autenticação Google";
+          return;
+        }
+        storeToken(resp.access_token);
+        updateDriveButton();
+        hint.textContent = "Drive conectado";
+        listDriveFiles();
+      },
+      error_callback: function (err) {
+        console.error(err);
+        hint.textContent = authErrorHint(err);
+      }
+    });
+    return true;
+  }
+
+  function connectDrive() {
+    if (!ensureTokenClient()) return;
+    hint.textContent = "Abrindo Google…";
+    try {
+      tokenClient.requestAccessToken({ prompt: driveAccessToken ? "" : "consent" });
+    } catch (e) {
+      console.error(e);
+      hint.textContent = authErrorHint(e);
+    }
+  }
+
+  async function listDriveFiles() {
+    if (!driveAccessToken) {
+      connectDrive();
+      return;
+    }
+    if (busy) return;
+    busy = true;
+    btnDrive.disabled = true;
+    hint.textContent = "Carregando Drive…";
+    setProgress(15, true);
+    hideDriveList();
+
+    var q = "mimeType contains 'image/' and trashed=false";
+    var url = "https://www.googleapis.com/drive/v3/files"
+      + "?pageSize=20"
+      + "&q=" + encodeURIComponent(q)
+      + "&fields=" + encodeURIComponent("files(id,name,mimeType,thumbnailLink)")
+      + "&orderBy=" + encodeURIComponent("modifiedTime desc");
+
+    try {
+      var res = await fetch(url, {
+        headers: { Authorization: "Bearer " + driveAccessToken }
+      });
+      if (res.status === 401 || res.status === 403) {
+        storeToken(null);
+        updateDriveButton();
+        hint.textContent = "Sessão Drive expirada. Conecte novamente";
+        setProgress(0, false);
+        return;
+      }
+      if (!res.ok) {
+        var body = "";
+        try { body = await res.text(); } catch (e) {}
+        console.error("Drive list", res.status, body);
+        hint.textContent = "Erro ao listar arquivos do Drive";
+        setProgress(0, false);
+        return;
+      }
+      var data = await res.json();
+      var files = (data && data.files) || [];
+      setProgress(100, true);
+      if (!files.length) {
+        hint.textContent = "Nenhuma imagem no Drive";
+        setTimeout(function () { setProgress(0, false); }, 300);
+        return;
+      }
+      renderDriveList(files);
+      hint.textContent = "Toque numa imagem";
+      setTimeout(function () { setProgress(0, false); }, 300);
+    } catch (err) {
+      console.error(err);
+      hint.textContent = "Erro de rede ao acessar o Drive";
+      setProgress(0, false);
+    } finally {
+      busy = false;
+      btnDrive.disabled = false;
+    }
+  }
+
+  function renderDriveList(files) {
+    driveList.innerHTML = "";
+    files.forEach(function (f) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "drive-item";
+      btn.setAttribute("data-id", f.id);
+      btn.setAttribute("data-name", f.name || "image");
+
+      if (f.thumbnailLink) {
+        var img = document.createElement("img");
+        img.alt = "";
+        img.referrerPolicy = "no-referrer";
+        img.src = f.thumbnailLink;
+        img.onerror = function () { img.style.display = "none"; };
+        btn.appendChild(img);
+      }
+
+      var span = document.createElement("span");
+      span.textContent = f.name || f.id;
+      btn.appendChild(span);
+
+      btn.addEventListener("click", function () {
+        pickDriveFile(f.id, f.name || "image.jpg");
+      });
+      driveList.appendChild(btn);
+    });
+    driveList.classList.add("visible");
+  }
+
+  async function pickDriveFile(id, name) {
+    if (!driveAccessToken || busy) return;
+    busy = true;
+    btnDrive.disabled = true;
+    btnUpload.disabled = true;
+    hint.textContent = "Baixando do Drive…";
+    setProgress(10, true);
+    hideDriveList();
+
+    var url = "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(id) + "?alt=media";
+    try {
+      var res = await fetch(url, {
+        headers: { Authorization: "Bearer " + driveAccessToken }
+      });
+      if (res.status === 401 || res.status === 403) {
+        storeToken(null);
+        updateDriveButton();
+        hint.textContent = "Sessão Drive expirada. Conecte novamente";
+        setProgress(0, false);
+        return;
+      }
+      if (!res.ok) {
+        hint.textContent = "Erro ao baixar do Drive";
+        setProgress(0, false);
+        return;
+      }
+      setProgress(40, true);
+      var blob = await res.blob();
+      var file = new File([blob], name, { type: blob.type || "image/jpeg" });
+      busy = false;
+      await processFile(file);
+    } catch (err) {
+      console.error(err);
+      hint.textContent = "Erro de rede ao baixar do Drive";
+      setProgress(0, false);
+    } finally {
+      busy = false;
+      btnDrive.disabled = false;
+      btnUpload.disabled = false;
+    }
+  }
+
+  loadStoredToken();
+  updateDriveButton();
+
   if (isAuthed()) showApp();
   else showLogin();
 
@@ -270,6 +558,8 @@
 
   btnLogout.addEventListener("click", function () {
     setAuthed(false);
+    storeToken(null);
+    updateDriveButton();
     clearResult();
     showLogin();
   });
@@ -282,6 +572,11 @@
     var file = fileInput.files && fileInput.files[0];
     fileInput.value = "";
     if (file) processFile(file);
+  });
+
+  btnDrive.addEventListener("click", function () {
+    if (driveAccessToken) listDriveFiles();
+    else connectDrive();
   });
 
   btnDownload.addEventListener("click", function () {
@@ -394,6 +689,7 @@
   async function processFile(file) {
     clearResult();
     btnUpload.disabled = true;
+    btnDrive.disabled = true;
     hint.textContent = "Processando…";
     setProgress(8, true);
 
@@ -425,6 +721,7 @@
         try { source.close(); } catch (e) {}
       }
       btnUpload.disabled = false;
+      btnDrive.disabled = false;
       setTimeout(function () { setProgress(0, false); }, 400);
     }
   }
