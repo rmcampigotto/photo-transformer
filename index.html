@@ -13,8 +13,11 @@
       --muted: #888;
       --bar: #fff;
       --tap: 52px;
-      --safe: env(safe-area-inset-bottom, 0px);
+      --safe-b: env(safe-area-inset-bottom, 0px);
+      --safe-t: env(safe-area-inset-top, 0px);
       --err: #ff6b6b;
+      --panel: #111;
+      --border: #333;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body {
@@ -30,8 +33,8 @@
       align-items: center;
       justify-content: center;
       min-height: 100dvh;
-      padding: 24px 20px calc(24px + var(--safe));
-      gap: 20px;
+      padding: calc(16px + var(--safe-t)) 16px calc(16px + var(--safe-b));
+      gap: 16px;
     }
     h1 {
       font-size: 1.1rem;
@@ -39,16 +42,17 @@
       letter-spacing: -0.02em;
       color: var(--fg);
     }
-    .screen { display: none; width: min(100%, 320px); flex-direction: column; align-items: stretch; gap: 16px; }
+    .screen { display: none; width: min(100%, 360px); flex-direction: column; align-items: stretch; gap: 16px; }
     .screen.active { display: flex; }
+    #loginScreen.active { width: min(100%, 320px); }
     .field { display: flex; flex-direction: column; gap: 8px; }
     .field label { font-size: 0.8rem; color: var(--muted); }
     .field input {
       min-height: var(--tap);
       width: 100%;
-      border: 1.5px solid #333;
+      border: 1.5px solid var(--border);
       border-radius: 12px;
-      background: #111;
+      background: var(--panel);
       color: var(--fg);
       font-size: 1rem;
       padding: 0 14px;
@@ -62,10 +66,26 @@
       text-align: center;
       min-height: 1.2em;
     }
+    .app-layout {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      width: 100%;
+      min-height: 0;
+    }
+    .app-main {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 14px;
+      width: 100%;
+      min-width: 0;
+    }
     .preview {
       width: 100%;
       aspect-ratio: 1;
-      background: #111;
+      max-height: min(52vw, 320px);
+      background: var(--panel);
       border-radius: 12px;
       overflow: hidden;
       display: none;
@@ -108,7 +128,7 @@
     .actions {
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 10px;
       width: 100%;
     }
     .btn {
@@ -125,11 +145,7 @@
     }
     .btn:active { opacity: 0.85; }
     .btn:disabled { opacity: 0.35; cursor: not-allowed; }
-    .btn-primary {
-      background: var(--fg);
-      color: var(--bg);
-    }
-    .btn-upload {
+    .btn-primary, .btn-upload {
       background: var(--fg);
       color: var(--bg);
     }
@@ -138,21 +154,19 @@
       color: var(--fg);
       border: 1.5px solid #444;
     }
-    .btn-drive.connected {
-      border-color: var(--fg);
-    }
+    .btn-drive.connected { border-color: var(--fg); }
     .btn-download {
       background: transparent;
       color: var(--fg);
       border: 1.5px solid #444;
     }
-    .btn-download:not(:disabled) {
-      border-color: var(--fg);
-    }
+    .btn-download:not(:disabled) { border-color: var(--fg); }
     .btn-process {
       background: var(--fg);
       color: var(--bg);
       display: none;
+      min-height: 44px;
+      font-size: 0.95rem;
     }
     .btn-process.visible { display: block; }
     .btn-ghost {
@@ -189,6 +203,8 @@
       flex-direction: column;
       gap: 8px;
       width: 100%;
+      min-height: 0;
+      order: -1;
     }
     .drive-panel.visible { display: flex; }
     .drive-nav {
@@ -199,7 +215,7 @@
     }
     .drive-back {
       flex-shrink: 0;
-      min-height: 36px;
+      min-height: 34px;
       padding: 0 10px;
       border: 1.5px solid #444;
       border-radius: 10px;
@@ -224,25 +240,26 @@
       white-space: nowrap;
     }
     .drive-list {
-      max-height: 240px;
+      max-height: min(42dvh, 360px);
       overflow-y: auto;
       -webkit-overflow-scrolling: touch;
-      border: 1.5px solid #333;
+      overscroll-behavior: contain;
+      border: 1.5px solid var(--border);
       border-radius: 12px;
-      background: #111;
+      background: var(--panel);
     }
     .drive-item {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
       width: 100%;
-      min-height: 48px;
-      padding: 8px 12px;
+      min-height: 36px;
+      padding: 5px 10px;
       border: none;
       border-bottom: 1px solid #222;
       background: transparent;
       color: var(--fg);
-      font-size: 0.9rem;
+      font-size: 0.85rem;
       text-align: left;
       cursor: pointer;
       -webkit-tap-highlight-color: transparent;
@@ -252,23 +269,23 @@
     .drive-item:active { background: #1a1a1a; }
     .drive-item.selected { background: #1a1a1a; }
     .drive-item img {
-      width: 36px;
-      height: 36px;
-      border-radius: 6px;
+      width: 28px;
+      height: 28px;
+      border-radius: 5px;
       object-fit: cover;
       background: #222;
       flex-shrink: 0;
     }
     .drive-icon {
-      width: 36px;
-      height: 36px;
-      border-radius: 6px;
+      width: 28px;
+      height: 28px;
+      border-radius: 5px;
       background: #222;
       display: flex;
       align-items: center;
       justify-content: center;
       flex-shrink: 0;
-      font-size: 1.1rem;
+      font-size: 0.95rem;
     }
     .drive-item span.name {
       flex: 1;
@@ -277,21 +294,76 @@
       white-space: nowrap;
     }
     .drive-check {
-      width: 22px;
-      height: 22px;
+      width: 18px;
+      height: 18px;
       border-radius: 50%;
       border: 1.5px solid #555;
       flex-shrink: 0;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 0.75rem;
+      font-size: 0.7rem;
       color: #000;
       background: transparent;
     }
     .drive-item.selected .drive-check {
       background: #fff;
       border-color: #fff;
+    }
+
+    /* Desktop / wide: two columns — Drive left, controls right */
+    @media (min-width: 800px) {
+      body {
+        align-items: stretch;
+        justify-content: center;
+        padding: calc(20px + var(--safe-t)) 24px calc(20px + var(--safe-b));
+      }
+      #appScreen.active {
+        width: min(100%, 1080px);
+        height: calc(100dvh - 40px - var(--safe-t) - var(--safe-b));
+        max-height: calc(100dvh - 40px - var(--safe-t) - var(--safe-b));
+      }
+      .app-layout {
+        flex-direction: row;
+        align-items: stretch;
+        justify-content: center;
+        gap: 28px;
+        height: 100%;
+        min-height: 0;
+      }
+      .drive-panel {
+        order: 0;
+        flex: 1.35 1 0;
+        max-width: none;
+        min-width: 0;
+      }
+      .drive-panel.visible {
+        display: flex;
+        height: 100%;
+      }
+      .drive-list {
+        flex: 1 1 auto;
+        max-height: none;
+        min-height: 0;
+      }
+      .app-main {
+        flex: 0 0 340px;
+        width: 340px;
+        max-width: 340px;
+        justify-content: flex-start;
+      }
+      .preview {
+        max-height: 340px;
+      }
+      .app-layout:not(:has(.drive-panel.visible)) {
+        justify-content: center;
+      }
+    }
+
+    @media (min-width: 1100px) {
+      #appScreen.active { width: min(100%, 1180px); }
+      .app-main { flex-basis: 360px; width: 360px; max-width: 360px; }
+      .preview { max-height: 360px; }
     }
   </style>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -315,38 +387,42 @@
   </div>
 
   <div class="screen" id="appScreen">
-    <div class="topbar">
-      <span style="width:48px"></span>
-      <h1>photo-transformer</h1>
-      <button type="button" class="btn btn-ghost" id="btnLogout" style="width:auto;padding:0 8px">Sair</button>
-    </div>
+    <div class="app-layout">
+      <aside class="drive-panel" id="drivePanel" aria-label="Navegador do Google Drive">
+        <div class="drive-nav">
+          <button type="button" class="drive-back" id="btnDriveBack" disabled>Voltar</button>
+          <span class="drive-path" id="drivePath">Meu Drive</span>
+        </div>
+        <div class="drive-list" id="driveList" aria-label="Pastas e arquivos do Drive"></div>
+        <button type="button" class="btn btn-process" id="btnProcessDrive" disabled>Processar selecionadas</button>
+      </aside>
 
-    <div class="preview" id="preview" aria-hidden="true">
-      <img id="previewImg" alt="Pré-visualização 1200×1200" />
-      <span class="preview-badge" id="previewBadge" hidden></span>
-    </div>
+      <main class="app-main">
+        <div class="topbar">
+          <span style="width:48px" aria-hidden="true"></span>
+          <h1>photo-transformer</h1>
+          <button type="button" class="btn btn-ghost" id="btnLogout" style="width:auto;padding:0 8px">Sair</button>
+        </div>
 
-    <div class="progress" id="progress" aria-hidden="true" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-      <div class="progress-bar" id="progressBar"></div>
-    </div>
+        <div class="preview" id="preview" aria-hidden="true">
+          <img id="previewImg" alt="Pré-visualização 1200×1200" />
+          <span class="preview-badge" id="previewBadge" hidden></span>
+        </div>
 
-    <div class="drive-panel" id="drivePanel">
-      <div class="drive-nav">
-        <button type="button" class="drive-back" id="btnDriveBack" disabled>Voltar</button>
-        <span class="drive-path" id="drivePath">Meu Drive</span>
-      </div>
-      <div class="drive-list" id="driveList" aria-label="Pastas e arquivos do Drive"></div>
-      <button type="button" class="btn btn-process" id="btnProcessDrive" disabled>Processar selecionadas</button>
-    </div>
+        <div class="progress" id="progress" aria-hidden="true" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div class="progress-bar" id="progressBar"></div>
+        </div>
 
-    <div class="actions">
-      <input type="file" id="fileInput" class="hidden-input" accept="image/*" multiple />
-      <button type="button" class="btn btn-upload" id="btnUpload">Upload</button>
-      <button type="button" class="btn btn-drive" id="btnDrive">Conectar Drive</button>
-      <button type="button" class="btn btn-download" id="btnDownload" disabled>Download</button>
-    </div>
+        <div class="actions">
+          <input type="file" id="fileInput" class="hidden-input" accept="image/*" multiple />
+          <button type="button" class="btn btn-upload" id="btnUpload">Upload</button>
+          <button type="button" class="btn btn-drive" id="btnDrive">Conectar Drive</button>
+          <button type="button" class="btn btn-download" id="btnDownload" disabled>Download</button>
+        </div>
 
-    <p class="hint" id="hint">1200×1200 · foto inteira · fundo branco</p>
+        <p class="hint" id="hint">1200×1200 · foto inteira · fundo branco</p>
+      </main>
+    </div>
   </div>
 
   <script>
