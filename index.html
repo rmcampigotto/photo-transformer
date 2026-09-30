@@ -69,6 +69,7 @@
       border-radius: 12px;
       overflow: hidden;
       display: none;
+      position: relative;
     }
     .preview.visible { display: block; }
     .preview img {
@@ -76,6 +77,18 @@
       height: 100%;
       object-fit: contain;
       display: block;
+    }
+    .preview-badge {
+      position: absolute;
+      right: 8px;
+      bottom: 8px;
+      background: rgba(0,0,0,0.75);
+      color: #fff;
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 4px 8px;
+      border-radius: 8px;
+      pointer-events: none;
     }
     .progress {
       width: 100%;
@@ -136,6 +149,12 @@
     .btn-download:not(:disabled) {
       border-color: var(--fg);
     }
+    .btn-process {
+      background: var(--fg);
+      color: var(--bg);
+      display: none;
+    }
+    .btn-process.visible { display: block; }
     .btn-ghost {
       background: transparent;
       color: var(--muted);
@@ -165,16 +184,53 @@
       overflow: hidden;
       clip: rect(0, 0, 0, 0);
     }
-    .drive-list {
+    .drive-panel {
       display: none;
-      max-height: 220px;
+      flex-direction: column;
+      gap: 8px;
+      width: 100%;
+    }
+    .drive-panel.visible { display: flex; }
+    .drive-nav {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+    }
+    .drive-back {
+      flex-shrink: 0;
+      min-height: 36px;
+      padding: 0 10px;
+      border: 1.5px solid #444;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--fg);
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+    .drive-back:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+    .drive-path {
+      flex: 1;
+      font-size: 0.8rem;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .drive-list {
+      max-height: 240px;
       overflow-y: auto;
       -webkit-overflow-scrolling: touch;
       border: 1.5px solid #333;
       border-radius: 12px;
       background: #111;
     }
-    .drive-list.visible { display: block; }
     .drive-item {
       display: flex;
       align-items: center;
@@ -194,6 +250,7 @@
     }
     .drive-item:last-child { border-bottom: none; }
     .drive-item:active { background: #1a1a1a; }
+    .drive-item.selected { background: #1a1a1a; }
     .drive-item img {
       width: 36px;
       height: 36px;
@@ -202,13 +259,43 @@
       background: #222;
       flex-shrink: 0;
     }
-    .drive-item span {
+    .drive-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 6px;
+      background: #222;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      font-size: 1.1rem;
+    }
+    .drive-item span.name {
+      flex: 1;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .drive-check {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 1.5px solid #555;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.75rem;
+      color: #000;
+      background: transparent;
+    }
+    .drive-item.selected .drive-check {
+      background: #fff;
+      border-color: #fff;
+    }
   </style>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 </head>
 <body>
   <div class="screen" id="loginScreen">
@@ -236,16 +323,24 @@
 
     <div class="preview" id="preview" aria-hidden="true">
       <img id="previewImg" alt="Pré-visualização 1200×1200" />
+      <span class="preview-badge" id="previewBadge" hidden></span>
     </div>
 
     <div class="progress" id="progress" aria-hidden="true" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
       <div class="progress-bar" id="progressBar"></div>
     </div>
 
-    <div class="drive-list" id="driveList" aria-label="Arquivos do Drive"></div>
+    <div class="drive-panel" id="drivePanel">
+      <div class="drive-nav">
+        <button type="button" class="drive-back" id="btnDriveBack" disabled>Voltar</button>
+        <span class="drive-path" id="drivePath">Meu Drive</span>
+      </div>
+      <div class="drive-list" id="driveList" aria-label="Pastas e arquivos do Drive"></div>
+      <button type="button" class="btn btn-process" id="btnProcessDrive" disabled>Processar selecionadas</button>
+    </div>
 
     <div class="actions">
-      <input type="file" id="fileInput" class="hidden-input" accept="image/*" />
+      <input type="file" id="fileInput" class="hidden-input" accept="image/*" multiple />
       <button type="button" class="btn btn-upload" id="btnUpload">Upload</button>
       <button type="button" class="btn btn-drive" id="btnDrive">Conectar Drive</button>
       <button type="button" class="btn btn-download" id="btnDownload" disabled>Download</button>
@@ -266,6 +361,7 @@
   var PASS = "rmcampigotto@123";
   var GOOGLE_CLIENT_ID = "440396226410-dmmt5bh0r93atn83hoq3bee0d09ejkg8.apps.googleusercontent.com";
   var DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+  var FOLDER_MIME = "application/vnd.google-apps.folder";
 
   var loginScreen = document.getElementById("loginScreen");
   var appScreen = document.getElementById("appScreen");
@@ -277,19 +373,27 @@
   var btnUpload = document.getElementById("btnUpload");
   var btnDrive = document.getElementById("btnDrive");
   var btnDownload = document.getElementById("btnDownload");
+  var btnProcessDrive = document.getElementById("btnProcessDrive");
+  var btnDriveBack = document.getElementById("btnDriveBack");
   var preview = document.getElementById("preview");
   var previewImg = document.getElementById("previewImg");
+  var previewBadge = document.getElementById("previewBadge");
   var progress = document.getElementById("progress");
   var progressBar = document.getElementById("progressBar");
   var hint = document.getElementById("hint");
+  var drivePanel = document.getElementById("drivePanel");
   var driveList = document.getElementById("driveList");
+  var drivePath = document.getElementById("drivePath");
 
-  var resultBlob = null;
-  var resultUrl = null;
-  var resultName = "photo-1200x1200.jpg";
+  var results = [];
+  var downloadUrl = null;
+  var downloadName = "photo-1200x1200.jpg";
   var driveAccessToken = null;
   var tokenClient = null;
   var busy = false;
+  var driveFolderId = "root";
+  var driveFolderStack = [{ id: "root", name: "Meu Drive" }];
+  var driveSelected = {};
 
   function showLogin() {
     loginScreen.classList.add("active");
@@ -335,13 +439,37 @@
     } else {
       btnDrive.textContent = "Conectar Drive";
       btnDrive.classList.remove("connected");
-      hideDriveList();
+      hideDrivePanel();
     }
   }
 
-  function hideDriveList() {
-    driveList.classList.remove("visible");
+  function hideDrivePanel() {
+    drivePanel.classList.remove("visible");
     driveList.innerHTML = "";
+    btnProcessDrive.classList.remove("visible");
+    btnProcessDrive.disabled = true;
+    driveSelected = {};
+  }
+
+  function updateProcessButton() {
+    var n = Object.keys(driveSelected).length;
+    if (n > 0) {
+      btnProcessDrive.classList.add("visible");
+      btnProcessDrive.disabled = busy;
+      btnProcessDrive.textContent = n === 1
+        ? "Processar 1 selecionada"
+        : "Processar " + n + " selecionadas";
+    } else {
+      btnProcessDrive.classList.remove("visible");
+      btnProcessDrive.disabled = true;
+      btnProcessDrive.textContent = "Processar selecionadas";
+    }
+  }
+
+  function updateDrivePath() {
+    var names = driveFolderStack.map(function (f) { return f.name; });
+    drivePath.textContent = names.join(" / ");
+    btnDriveBack.disabled = driveFolderStack.length <= 1 || busy;
   }
 
   function authErrorHint(err) {
@@ -384,7 +512,7 @@
         storeToken(resp.access_token);
         updateDriveButton();
         hint.textContent = "Drive conectado";
-        listDriveFiles();
+        openDriveBrowser();
       },
       error_callback: function (err) {
         console.error(err);
@@ -405,7 +533,14 @@
     }
   }
 
-  async function listDriveFiles() {
+  function openDriveBrowser() {
+    driveFolderStack = [{ id: "root", name: "Meu Drive" }];
+    driveFolderId = "root";
+    driveSelected = {};
+    listDriveFolder("root");
+  }
+
+  async function listDriveFolder(folderId) {
     if (!driveAccessToken) {
       connectDrive();
       return;
@@ -413,16 +548,20 @@
     if (busy) return;
     busy = true;
     btnDrive.disabled = true;
-    hint.textContent = "Carregando Drive…";
+    btnDriveBack.disabled = true;
+    btnProcessDrive.disabled = true;
+    hint.textContent = "Carregando pasta…";
     setProgress(15, true);
-    hideDriveList();
+    driveList.innerHTML = "";
+    drivePanel.classList.add("visible");
+    updateDrivePath();
 
-    var q = "mimeType contains 'image/' and trashed=false";
+    var q = "'" + folderId + "' in parents and trashed=false and (mimeType = '" + FOLDER_MIME + "' or mimeType contains 'image/')";
     var url = "https://www.googleapis.com/drive/v3/files"
-      + "?pageSize=20"
+      + "?pageSize=100"
       + "&q=" + encodeURIComponent(q)
       + "&fields=" + encodeURIComponent("files(id,name,mimeType,thumbnailLink)")
-      + "&orderBy=" + encodeURIComponent("modifiedTime desc");
+      + "&orderBy=" + encodeURIComponent("folder,name");
 
     try {
       var res = await fetch(url, {
@@ -433,26 +572,29 @@
         updateDriveButton();
         hint.textContent = "Sessão Drive expirada. Conecte novamente";
         setProgress(0, false);
+        hideDrivePanel();
         return;
       }
       if (!res.ok) {
         var body = "";
         try { body = await res.text(); } catch (e) {}
         console.error("Drive list", res.status, body);
-        hint.textContent = "Erro ao listar arquivos do Drive";
+        hint.textContent = "Erro ao listar pasta do Drive";
         setProgress(0, false);
         return;
       }
       var data = await res.json();
       var files = (data && data.files) || [];
       setProgress(100, true);
-      if (!files.length) {
-        hint.textContent = "Nenhuma imagem no Drive";
-        setTimeout(function () { setProgress(0, false); }, 300);
-        return;
-      }
       renderDriveList(files);
-      hint.textContent = "Toque numa imagem";
+      var selCount = Object.keys(driveSelected).length;
+      if (!files.length) {
+        hint.textContent = "Pasta vazia";
+      } else if (selCount > 0) {
+        hint.textContent = selCount + " selecionada(s) · toque pasta ou imagem";
+      } else {
+        hint.textContent = "Pastas e imagens · toque para abrir/selecionar";
+      }
       setTimeout(function () { setProgress(0, false); }, 300);
     } catch (err) {
       console.error(err);
@@ -461,17 +603,44 @@
     } finally {
       busy = false;
       btnDrive.disabled = false;
+      updateDrivePath();
+      updateProcessButton();
     }
   }
 
   function renderDriveList(files) {
     driveList.innerHTML = "";
+    var folders = [];
+    var images = [];
     files.forEach(function (f) {
+      if (f.mimeType === FOLDER_MIME) folders.push(f);
+      else images.push(f);
+    });
+
+    folders.forEach(function (f) {
       var btn = document.createElement("button");
       btn.type = "button";
       btn.className = "drive-item";
+      var icon = document.createElement("div");
+      icon.className = "drive-icon";
+      icon.textContent = "📁";
+      btn.appendChild(icon);
+      var span = document.createElement("span");
+      span.className = "name";
+      span.textContent = f.name || f.id;
+      btn.appendChild(span);
+      btn.addEventListener("click", function () {
+        enterFolder(f.id, f.name || "Pasta");
+      });
+      driveList.appendChild(btn);
+    });
+
+    images.forEach(function (f) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "drive-item";
+      if (driveSelected[f.id]) btn.classList.add("selected");
       btn.setAttribute("data-id", f.id);
-      btn.setAttribute("data-name", f.name || "image");
 
       if (f.thumbnailLink) {
         var img = document.createElement("img");
@@ -480,60 +649,135 @@
         img.src = f.thumbnailLink;
         img.onerror = function () { img.style.display = "none"; };
         btn.appendChild(img);
+      } else {
+        var icon = document.createElement("div");
+        icon.className = "drive-icon";
+        icon.textContent = "🖼";
+        btn.appendChild(icon);
       }
 
       var span = document.createElement("span");
+      span.className = "name";
       span.textContent = f.name || f.id;
       btn.appendChild(span);
 
+      var check = document.createElement("span");
+      check.className = "drive-check";
+      check.textContent = driveSelected[f.id] ? "✓" : "";
+      btn.appendChild(check);
+
       btn.addEventListener("click", function () {
-        pickDriveFile(f.id, f.name || "image.jpg");
+        toggleDriveSelect(f, btn, check);
       });
       driveList.appendChild(btn);
     });
-    driveList.classList.add("visible");
   }
 
-  async function pickDriveFile(id, name) {
-    if (!driveAccessToken || busy) return;
-    busy = true;
-    btnDrive.disabled = true;
-    btnUpload.disabled = true;
-    hint.textContent = "Baixando do Drive…";
-    setProgress(10, true);
-    hideDriveList();
+  function toggleDriveSelect(file, btn, check) {
+    if (driveSelected[file.id]) {
+      delete driveSelected[file.id];
+      btn.classList.remove("selected");
+      check.textContent = "";
+    } else {
+      driveSelected[file.id] = { id: file.id, name: file.name || "image.jpg" };
+      btn.classList.add("selected");
+      check.textContent = "✓";
+    }
+    updateProcessButton();
+    var n = Object.keys(driveSelected).length;
+    hint.textContent = n > 0
+      ? n + " selecionada(s)"
+      : "Pastas e imagens · toque para abrir/selecionar";
+  }
 
+  function enterFolder(id, name) {
+    if (busy) return;
+    driveFolderStack.push({ id: id, name: name });
+    driveFolderId = id;
+    listDriveFolder(id);
+  }
+
+  function goBackFolder() {
+    if (busy || driveFolderStack.length <= 1) return;
+    driveFolderStack.pop();
+    var current = driveFolderStack[driveFolderStack.length - 1];
+    driveFolderId = current.id;
+    listDriveFolder(driveFolderId);
+  }
+
+  async function downloadDriveFile(id, name) {
     var url = "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(id) + "?alt=media";
+    var res = await fetch(url, {
+      headers: { Authorization: "Bearer " + driveAccessToken }
+    });
+    if (res.status === 401 || res.status === 403) {
+      storeToken(null);
+      updateDriveButton();
+      throw new Error("auth");
+    }
+    if (!res.ok) throw new Error("download");
+    var blob = await res.blob();
+    return new File([blob], name, { type: blob.type || "image/jpeg" });
+  }
+
+  async function processDriveSelection() {
+    var items = Object.keys(driveSelected).map(function (k) { return driveSelected[k]; });
+    if (!items.length || busy) return;
+    if (!driveAccessToken) {
+      connectDrive();
+      return;
+    }
+
+    busy = true;
+    setBusyUI(true);
+    hideDrivePanel();
+    clearResults();
+    hint.textContent = "Baixando do Drive…";
+    setProgress(5, true);
+
+    var files = [];
     try {
-      var res = await fetch(url, {
-        headers: { Authorization: "Bearer " + driveAccessToken }
-      });
-      if (res.status === 401 || res.status === 403) {
-        storeToken(null);
-        updateDriveButton();
-        hint.textContent = "Sessão Drive expirada. Conecte novamente";
-        setProgress(0, false);
-        return;
+      for (var i = 0; i < items.length; i++) {
+        hint.textContent = "Baixando " + (i + 1) + " de " + items.length + "…";
+        setProgress(((i + 0.5) / items.length) * 40, true);
+        try {
+          var file = await downloadDriveFile(items[i].id, items[i].name);
+          files.push(file);
+        } catch (err) {
+          if (err && err.message === "auth") {
+            hint.textContent = "Sessão Drive expirada. Conecte novamente";
+            setProgress(0, false);
+            return;
+          }
+          console.error(err);
+        }
+        setProgress(((i + 1) / items.length) * 40, true);
       }
-      if (!res.ok) {
+
+      if (!files.length) {
         hint.textContent = "Erro ao baixar do Drive";
         setProgress(0, false);
         return;
       }
-      setProgress(40, true);
-      var blob = await res.blob();
-      var file = new File([blob], name, { type: blob.type || "image/jpeg" });
+
       busy = false;
-      await processFile(file);
+      await processFiles(files);
     } catch (err) {
       console.error(err);
       hint.textContent = "Erro de rede ao baixar do Drive";
       setProgress(0, false);
     } finally {
       busy = false;
-      btnDrive.disabled = false;
-      btnUpload.disabled = false;
+      setBusyUI(false);
     }
+  }
+
+  function setBusyUI(on) {
+    btnUpload.disabled = on;
+    btnDrive.disabled = on;
+    btnDownload.disabled = on || !results.length;
+    btnProcessDrive.disabled = on || Object.keys(driveSelected).length === 0;
+    btnDriveBack.disabled = on || driveFolderStack.length <= 1;
   }
 
   loadStoredToken();
@@ -560,7 +804,8 @@
     setAuthed(false);
     storeToken(null);
     updateDriveButton();
-    clearResult();
+    clearResults();
+    hideDrivePanel();
     showLogin();
   });
 
@@ -569,21 +814,34 @@
   });
 
   fileInput.addEventListener("change", function () {
-    var file = fileInput.files && fileInput.files[0];
+    var list = fileInput.files;
     fileInput.value = "";
-    if (file) processFile(file);
+    if (!list || !list.length) return;
+    var files = [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].type && list[i].type.indexOf("image/") === 0) files.push(list[i]);
+      else if (!list[i].type) files.push(list[i]);
+    }
+    if (!files.length) {
+      hint.textContent = "Nenhuma imagem válida";
+      return;
+    }
+    processFiles(files);
   });
 
   btnDrive.addEventListener("click", function () {
-    if (driveAccessToken) listDriveFiles();
+    if (driveAccessToken) openDriveBrowser();
     else connectDrive();
   });
 
+  btnDriveBack.addEventListener("click", goBackFolder);
+  btnProcessDrive.addEventListener("click", processDriveSelection);
+
   btnDownload.addEventListener("click", function () {
-    if (!resultBlob) return;
+    if (!results.length || !downloadUrl) return;
     var a = document.createElement("a");
-    a.href = resultUrl;
-    a.download = resultName;
+    a.href = downloadUrl;
+    a.download = downloadName;
     a.rel = "noopener";
     document.body.appendChild(a);
     a.click();
@@ -603,13 +861,19 @@
     progress.setAttribute("aria-valuenow", String(n));
   }
 
-  function clearResult() {
-    if (resultUrl) URL.revokeObjectURL(resultUrl);
-    resultBlob = null;
-    resultUrl = null;
+  function clearResults() {
+    if (downloadUrl) URL.revokeObjectURL(downloadUrl);
+    results.forEach(function (r) {
+      if (r.url) URL.revokeObjectURL(r.url);
+    });
+    results = [];
+    downloadUrl = null;
+    downloadName = "photo-1200x1200.jpg";
     previewImg.removeAttribute("src");
     preview.classList.remove("visible");
     preview.setAttribute("aria-hidden", "true");
+    previewBadge.hidden = true;
+    previewBadge.textContent = "";
     btnDownload.disabled = true;
   }
 
@@ -617,6 +881,17 @@
     var n = name || "photo";
     var i = n.lastIndexOf(".");
     return i > 0 ? n.slice(0, i) : n;
+  }
+
+  function uniqueName(base, used) {
+    var name = base + "-1200x1200.jpg";
+    var n = 2;
+    while (used[name]) {
+      name = base + "-" + n + "-1200x1200.jpg";
+      n++;
+    }
+    used[name] = true;
+    return name;
   }
 
   function loadOriented(blob) {
@@ -690,42 +965,118 @@
     });
   }
 
-  async function processFile(file) {
-    clearResult();
-    btnUpload.disabled = true;
-    btnDrive.disabled = true;
-    hint.textContent = "Processando…";
-    setProgress(8, true);
-
+  async function processOne(file) {
     var source = null;
     try {
-      setProgress(25, true);
       source = await loadOriented(file);
-      setProgress(55, true);
       var canvas = containToSquare(source);
-      setProgress(75, true);
       var blob = await canvasToBlob(canvas);
-      setProgress(100, true);
-
-      resultBlob = blob;
-      resultUrl = URL.createObjectURL(blob);
-      resultName = baseName(file.name) + "-1200x1200.jpg";
-
-      previewImg.src = resultUrl;
-      preview.classList.add("visible");
-      preview.setAttribute("aria-hidden", "false");
-      btnDownload.disabled = false;
-      hint.textContent = "Pronto · 1200×1200";
-    } catch (err) {
-      console.error(err);
-      hint.textContent = "Erro ao processar a imagem";
-      clearResult();
+      return { blob: blob, sourceName: file.name || "photo" };
     } finally {
       if (source && typeof source.close === "function") {
         try { source.close(); } catch (e) {}
       }
-      btnUpload.disabled = false;
-      btnDrive.disabled = false;
+    }
+  }
+
+  async function buildDownload(items) {
+    if (downloadUrl) {
+      URL.revokeObjectURL(downloadUrl);
+      downloadUrl = null;
+    }
+    if (items.length === 1) {
+      downloadUrl = items[0].url;
+      downloadName = items[0].name;
+      return;
+    }
+    if (typeof JSZip === "undefined") {
+      throw new Error("JSZip indisponível");
+    }
+    var zip = new JSZip();
+    items.forEach(function (r) {
+      zip.file(r.name, r.blob);
+    });
+    var zipBlob = await zip.generateAsync({ type: "blob" }, function (meta) {
+      setProgress(90 + (meta.percent || 0) * 0.1, true);
+    });
+    downloadUrl = URL.createObjectURL(zipBlob);
+    downloadName = "photo-transformer.zip";
+  }
+
+  async function processFiles(files) {
+    if (busy) return;
+    busy = true;
+    clearResults();
+    setBusyUI(true);
+    hideDrivePanel();
+
+    var total = files.length;
+    var usedNames = {};
+    var ok = 0;
+    var fail = 0;
+
+    hint.textContent = total === 1 ? "Processando…" : "Processando 1 de " + total + "…";
+    setProgress(2, true);
+
+    try {
+      for (var i = 0; i < total; i++) {
+        hint.textContent = total === 1
+          ? "Processando…"
+          : "Foto " + (i + 1) + " de " + total;
+        setProgress(((i) / total) * 85 + 2, true);
+        try {
+          var out = await processOne(files[i]);
+          var name = uniqueName(baseName(out.sourceName), usedNames);
+          var url = URL.createObjectURL(out.blob);
+          results.push({ blob: out.blob, name: name, url: url });
+          ok++;
+          previewImg.src = url;
+          preview.classList.add("visible");
+          preview.setAttribute("aria-hidden", "false");
+          if (total > 1) {
+            previewBadge.hidden = false;
+            previewBadge.textContent = ok + " / " + total;
+          } else {
+            previewBadge.hidden = true;
+          }
+        } catch (err) {
+          console.error(err);
+          fail++;
+        }
+        setProgress(((i + 1) / total) * 85 + 2, true);
+      }
+
+      if (!results.length) {
+        hint.textContent = "Erro ao processar as imagens";
+        clearResults();
+        setProgress(0, false);
+        return;
+      }
+
+      hint.textContent = results.length > 1 ? "Gerando ZIP…" : "Finalizando…";
+      setProgress(88, true);
+      await buildDownload(results);
+      setProgress(100, true);
+
+      btnDownload.disabled = false;
+      if (results.length === 1) {
+        hint.textContent = "Pronto · 1200×1200";
+        btnDownload.textContent = "Download";
+      } else {
+        previewBadge.hidden = false;
+        previewBadge.textContent = results.length + " prontas";
+        hint.textContent = fail
+          ? results.length + " prontas · " + fail + " com erro · ZIP"
+          : results.length + " prontas · photo-transformer.zip";
+        btnDownload.textContent = "Download ZIP";
+      }
+    } catch (err) {
+      console.error(err);
+      hint.textContent = "Erro ao processar as imagens";
+      clearResults();
+    } finally {
+      busy = false;
+      setBusyUI(false);
       setTimeout(function () { setProgress(0, false); }, 400);
     }
   }
