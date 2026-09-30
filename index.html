@@ -311,59 +311,83 @@
       border-color: #fff;
     }
 
-    /* Desktop / wide: two columns — Drive left, controls right */
+    .drive-more {
+      display: none;
+      min-height: 40px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      border: 1.5px solid #444;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--fg);
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+    .drive-more.visible { display: block; }
+    .drive-more:disabled { opacity: 0.35; cursor: not-allowed; }
+
+    /* Desktop / wide: Drive left (~40%, max 420px), controls right, top-aligned */
     @media (min-width: 800px) {
       body {
-        align-items: stretch;
-        justify-content: center;
+        align-items: center;
+        justify-content: flex-start;
         padding: calc(20px + var(--safe-t)) 24px calc(20px + var(--safe-b));
       }
       #appScreen.active {
-        width: min(100%, 1080px);
-        height: calc(100dvh - 40px - var(--safe-t) - var(--safe-b));
-        max-height: calc(100dvh - 40px - var(--safe-t) - var(--safe-b));
+        width: min(100%, 860px);
+        height: auto;
+        max-height: none;
       }
       .app-layout {
         flex-direction: row;
-        align-items: stretch;
+        align-items: flex-start;
         justify-content: center;
-        gap: 28px;
-        height: 100%;
+        gap: 24px;
+        height: auto;
         min-height: 0;
       }
       .drive-panel {
         order: 0;
-        flex: 1.35 1 0;
-        max-width: none;
-        min-width: 0;
+        flex: 0 1 40%;
+        width: min(40%, 420px);
+        max-width: 420px;
+        min-width: 260px;
       }
       .drive-panel.visible {
         display: flex;
-        height: 100%;
+        height: auto;
+        max-height: calc(100dvh - 48px - var(--safe-t) - var(--safe-b));
       }
       .drive-list {
         flex: 1 1 auto;
-        max-height: none;
-        min-height: 0;
+        max-height: min(68dvh, 560px);
+        min-height: 160px;
       }
       .app-main {
         flex: 0 0 340px;
         width: 340px;
         max-width: 340px;
         justify-content: flex-start;
+        padding-top: 0;
       }
       .preview {
-        max-height: 340px;
+        max-height: 300px;
       }
       .app-layout:not(:has(.drive-panel.visible)) {
         justify-content: center;
       }
+      .app-layout:not(:has(.drive-panel.visible)) .app-main {
+        flex: 0 0 360px;
+        width: 360px;
+        max-width: 360px;
+      }
     }
 
     @media (min-width: 1100px) {
-      #appScreen.active { width: min(100%, 1180px); }
+      #appScreen.active { width: min(100%, 900px); }
       .app-main { flex-basis: 360px; width: 360px; max-width: 360px; }
-      .preview { max-height: 360px; }
+      .preview { max-height: 320px; }
     }
   </style>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -394,6 +418,7 @@
           <span class="drive-path" id="drivePath">Meu Drive</span>
         </div>
         <div class="drive-list" id="driveList" aria-label="Pastas e arquivos do Drive"></div>
+        <button type="button" class="drive-more" id="btnDriveMore" hidden>Carregar mais</button>
         <button type="button" class="btn btn-process" id="btnProcessDrive" disabled>Processar selecionadas</button>
       </aside>
 
@@ -460,6 +485,7 @@
   var drivePanel = document.getElementById("drivePanel");
   var driveList = document.getElementById("driveList");
   var drivePath = document.getElementById("drivePath");
+  var btnDriveMore = document.getElementById("btnDriveMore");
 
   var results = [];
   var downloadUrl = null;
@@ -470,6 +496,8 @@
   var driveFolderId = "root";
   var driveFolderStack = [{ id: "root", name: "Meu Drive" }];
   var driveSelected = {};
+  var driveNextPageToken = null;
+  var driveListed = [];
 
   function showLogin() {
     loginScreen.classList.add("active");
@@ -525,6 +553,22 @@
     btnProcessDrive.classList.remove("visible");
     btnProcessDrive.disabled = true;
     driveSelected = {};
+    driveNextPageToken = null;
+    driveListed = [];
+    updateDriveMoreButton();
+  }
+
+  function updateDriveMoreButton() {
+    if (driveNextPageToken) {
+      btnDriveMore.hidden = false;
+      btnDriveMore.classList.add("visible");
+      btnDriveMore.disabled = busy;
+      btnDriveMore.textContent = "Carregar mais";
+    } else {
+      btnDriveMore.hidden = true;
+      btnDriveMore.classList.remove("visible");
+      btnDriveMore.disabled = true;
+    }
   }
 
   function updateProcessButton() {
@@ -613,10 +657,52 @@
     driveFolderStack = [{ id: "root", name: "Meu Drive" }];
     driveFolderId = "root";
     driveSelected = {};
+    driveNextPageToken = null;
+    driveListed = [];
     listDriveFolder("root");
   }
 
-  async function listDriveFolder(folderId) {
+  function driveQuery(folderId) {
+    return "'" + folderId + "' in parents and trashed=false and (mimeType = '" + FOLDER_MIME + "' or mimeType contains 'image/')";
+  }
+
+  function sortDriveFiles(files) {
+    var folders = [];
+    var images = [];
+    (files || []).forEach(function (f) {
+      if (!f) return;
+      if (f.mimeType === FOLDER_MIME) folders.push(f);
+      else if (f.mimeType && String(f.mimeType).indexOf("image/") === 0) images.push(f);
+      else if (f.mimeType && String(f.mimeType).indexOf("image/") !== -1) images.push(f);
+    });
+    function byName(a, b) {
+      var an = (a.name || "").toLowerCase();
+      var bn = (b.name || "").toLowerCase();
+      if (an < bn) return -1;
+      if (an > bn) return 1;
+      return 0;
+    }
+    folders.sort(byName);
+    images.sort(byName);
+    return folders.concat(images);
+  }
+
+  function buildDriveListUrl(folderId, pageToken) {
+    var q = driveQuery(folderId);
+    var url = "https://www.googleapis.com/drive/v3/files"
+      + "?pageSize=100"
+      + "&q=" + encodeURIComponent(q)
+      + "&fields=" + encodeURIComponent("nextPageToken,files(id,name,mimeType,thumbnailLink,driveId)")
+      + "&spaces=drive"
+      + "&includeItemsFromAllDrives=true"
+      + "&supportsAllDrives=true";
+    if (pageToken) url += "&pageToken=" + encodeURIComponent(pageToken);
+    return url;
+  }
+
+  async function listDriveFolder(folderId, opts) {
+    opts = opts || {};
+    var append = !!opts.append;
     if (!driveAccessToken) {
       connectDrive();
       return;
@@ -626,18 +712,18 @@
     btnDrive.disabled = true;
     btnDriveBack.disabled = true;
     btnProcessDrive.disabled = true;
-    hint.textContent = "Carregando pasta…";
-    setProgress(15, true);
-    driveList.innerHTML = "";
+    updateDriveMoreButton();
+    hint.textContent = append ? "Carregando mais…" : "Carregando pasta…";
+    setProgress(append ? 40 : 15, true);
+    if (!append) {
+      driveList.innerHTML = "";
+      driveListed = [];
+      driveNextPageToken = null;
+    }
     drivePanel.classList.add("visible");
     updateDrivePath();
 
-    var q = "'" + folderId + "' in parents and trashed=false and (mimeType = '" + FOLDER_MIME + "' or mimeType contains 'image/')";
-    var url = "https://www.googleapis.com/drive/v3/files"
-      + "?pageSize=100"
-      + "&q=" + encodeURIComponent(q)
-      + "&fields=" + encodeURIComponent("files(id,name,mimeType,thumbnailLink)")
-      + "&orderBy=" + encodeURIComponent("folder,name");
+    var url = buildDriveListUrl(folderId, append ? driveNextPageToken : null);
 
     try {
       var res = await fetch(url, {
@@ -660,17 +746,8 @@
         return;
       }
       var data = await res.json();
-      var files = (data && data.files) || [];
+      mergeAndRenderDrive(data, append);
       setProgress(100, true);
-      renderDriveList(files);
-      var selCount = Object.keys(driveSelected).length;
-      if (!files.length) {
-        hint.textContent = "Pasta vazia";
-      } else if (selCount > 0) {
-        hint.textContent = selCount + " selecionada(s) · toque pasta ou imagem";
-      } else {
-        hint.textContent = "Pastas e imagens · toque para abrir/selecionar";
-      }
       setTimeout(function () { setProgress(0, false); }, 300);
     } catch (err) {
       console.error(err);
@@ -681,6 +758,41 @@
       btnDrive.disabled = false;
       updateDrivePath();
       updateProcessButton();
+      updateDriveMoreButton();
+    }
+  }
+
+  function mergeAndRenderDrive(data, append) {
+    var pageFiles = (data && data.files) || [];
+    driveNextPageToken = (data && data.nextPageToken) || null;
+    if (append) {
+      var seen = {};
+      driveListed.forEach(function (f) { seen[f.id] = true; });
+      pageFiles.forEach(function (f) {
+        if (f && f.id && !seen[f.id]) {
+          driveListed.push(f);
+          seen[f.id] = true;
+        }
+      });
+    } else {
+      driveListed = pageFiles.slice();
+    }
+    var sorted = sortDriveFiles(driveListed);
+    renderDriveList(sorted);
+    updateDriveMoreButton();
+    var folderCount = 0;
+    var imageCount = 0;
+    sorted.forEach(function (f) {
+      if (f.mimeType === FOLDER_MIME) folderCount++;
+      else imageCount++;
+    });
+    var selCount = Object.keys(driveSelected).length;
+    if (!sorted.length) {
+      hint.textContent = "Pasta vazia · abra uma pasta para ver imagens";
+    } else if (selCount > 0) {
+      hint.textContent = selCount + " selecionada(s) · " + folderCount + " pasta(s) · " + imageCount + " imagem(ns)";
+    } else {
+      hint.textContent = folderCount + " pasta(s) · " + imageCount + " imagem(ns) · toque para abrir/selecionar";
     }
   }
 
@@ -723,7 +835,14 @@
         img.alt = "";
         img.referrerPolicy = "no-referrer";
         img.src = f.thumbnailLink;
-        img.onerror = function () { img.style.display = "none"; };
+        img.onerror = function () {
+          img.replaceWith((function () {
+            var ic = document.createElement("div");
+            ic.className = "drive-icon";
+            ic.textContent = "🖼";
+            return ic;
+          })());
+        };
         btn.appendChild(img);
       } else {
         var icon = document.createElement("div");
@@ -770,6 +889,8 @@
     if (busy) return;
     driveFolderStack.push({ id: id, name: name });
     driveFolderId = id;
+    driveNextPageToken = null;
+    driveListed = [];
     listDriveFolder(id);
   }
 
@@ -778,11 +899,18 @@
     driveFolderStack.pop();
     var current = driveFolderStack[driveFolderStack.length - 1];
     driveFolderId = current.id;
+    driveNextPageToken = null;
+    driveListed = [];
     listDriveFolder(driveFolderId);
   }
 
+  function loadMoreDrive() {
+    if (busy || !driveNextPageToken) return;
+    listDriveFolder(driveFolderId, { append: true });
+  }
+
   async function downloadDriveFile(id, name) {
-    var url = "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(id) + "?alt=media";
+    var url = "https://www.googleapis.com/drive/v3/files/" + encodeURIComponent(id) + "?alt=media&supportsAllDrives=true";
     var res = await fetch(url, {
       headers: { Authorization: "Bearer " + driveAccessToken }
     });
@@ -854,6 +982,7 @@
     btnDownload.disabled = on || !results.length;
     btnProcessDrive.disabled = on || Object.keys(driveSelected).length === 0;
     btnDriveBack.disabled = on || driveFolderStack.length <= 1;
+    updateDriveMoreButton();
   }
 
   loadStoredToken();
@@ -911,6 +1040,7 @@
   });
 
   btnDriveBack.addEventListener("click", goBackFolder);
+  btnDriveMore.addEventListener("click", loadMoreDrive);
   btnProcessDrive.addEventListener("click", processDriveSelection);
 
   btnDownload.addEventListener("click", function () {
