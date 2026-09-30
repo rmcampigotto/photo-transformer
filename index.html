@@ -275,6 +275,17 @@
       object-fit: cover;
       background: #222;
       flex-shrink: 0;
+      content-visibility: auto;
+    }
+    .drive-item img.thumb-pending {
+      opacity: 0.35;
+    }
+    .drive-thumb-ph {
+      width: 28px;
+      height: 28px;
+      border-radius: 5px;
+      background: #222;
+      flex-shrink: 0;
     }
     .drive-icon {
       width: 28px;
@@ -515,6 +526,12 @@
   var driveListed = [];
   var driveSharedListed = [];
   var SHARED_DRIVE_KIND = "sharedDrive";
+  var driveListCache = Object.create(null);
+  var driveListAbort = null;
+  var driveNavToken = 0;
+  var driveThumbObserver = null;
+  var RECENT_PAGE_SIZE = 20;
+  var FOLDER_PAGE_SIZE = 40;
 
   function showLogin() {
     loginScreen.classList.add("active");
@@ -565,6 +582,7 @@
   }
 
   function hideDrivePanel() {
+    abortDriveListFetch();
     drivePanel.classList.remove("visible");
     driveList.innerHTML = "";
     btnProcessDrive.classList.remove("visible");
@@ -673,6 +691,8 @@
   }
 
   function openDriveBrowser() {
+    abortDriveListFetch();
+    driveListCache = Object.create(null);
     driveFolderStack = [{ id: "root", name: "Meu Drive", kind: "root" }];
     driveFolderId = "root";
     driveActiveDriveId = null;
@@ -680,7 +700,8 @@
     driveNextPageToken = null;
     driveListed = [];
     driveSharedListed = [];
-    loadDriveView();
+    driveList.textContent = "";
+    loadDriveView({ force: true });
   }
 
   function currentStackEntry() {
@@ -689,6 +710,68 @@
 
   function isRootView() {
     return currentStackEntry().kind === "root";
+  }
+
+  function driveCacheKey(entry) {
+    entry = entry || currentStackEntry();
+    if (entry.kind === "root") return "root";
+    if (entry.kind === SHARED_DRIVE_KIND) return "drive:" + entry.id;
+    return "folder:" + entry.id + "|d:" + (entry.driveId || "");
+  }
+
+  function abortDriveListFetch() {
+    if (driveListAbort) {
+      try { driveListAbort.abort(); } catch (e) {}
+    }
+    driveListAbort = null;
+    driveNavToken++;
+  }
+
+  function beginDriveListSignal() {
+    abortDriveListFetch();
+    driveListAbort = typeof AbortController !== "undefined" ? new AbortController() : null;
+    return {
+      token: driveNavToken,
+      signal: driveListAbort ? driveListAbort.signal : undefined
+    };
+  }
+
+  function isStaleNav(token) {
+    return token !== driveNavToken;
+  }
+
+  function putDriveCache(key, patch) {
+    var prev = driveListCache[key] || {};
+    driveListCache[key] = {
+      listed: patch.listed != null ? patch.listed.slice() : (prev.listed ? prev.listed.slice() : []),
+      sharedListed: patch.sharedListed != null
+        ? patch.sharedListed.slice()
+        : (prev.sharedListed ? prev.sharedListed.slice() : []),
+      nextPageToken: patch.nextPageToken !== undefined ? patch.nextPageToken : (prev.nextPageToken || null),
+      recentLoaded: patch.recentLoaded != null ? patch.recentLoaded : !!prev.recentLoaded
+    };
+  }
+
+  function restoreFromCache(key) {
+    var cached = driveListCache[key];
+    if (!cached) return false;
+    driveListed = (cached.listed || []).slice();
+    driveSharedListed = (cached.sharedListed || []).slice();
+    driveNextPageToken = cached.nextPageToken || null;
+    drivePanel.classList.add("visible");
+    updateDrivePath();
+    if (isRootView()) {
+      renderRootDriveList();
+      if (!cached.recentLoaded) {
+        loadRootRecentInBackground();
+      }
+    } else {
+      var sorted = sortDriveFiles(driveListed);
+      renderDriveList(sorted, { sharedDrives: [], sections: false });
+      updateDriveMoreButton();
+      updateDriveHint(sorted, []);
+    }
+    return true;
   }
 
   function driveChildrenQuery(folderId) {
@@ -728,7 +811,7 @@
   function buildFilesListUrl(opts) {
     opts = opts || {};
     var url = "https://www.googleapis.com/drive/v3/files"
-      + "?pageSize=" + encodeURIComponent(String(opts.pageSize || 100))
+      + "?pageSize=" + encodeURIComponent(String(opts.pageSize || FOLDER_PAGE_SIZE))
       + "&q=" + encodeURIComponent(opts.q)
       + "&fields=" + encodeURIComponent("nextPageToken,files(id,name,mimeType,thumbnailLink,driveId,modifiedTime)")
       + "&spaces=drive"
@@ -749,9 +832,14 @@
     return url;
   }
 
-  async function driveFetchJson(url) {
+  function isAbortError(err) {
+    return !!(err && (err.name === "AbortError" || err.message === "aborted"));
+  }
+
+  async function driveFetchJson(url, signal) {
     var res = await fetch(url, {
-      headers: { Authorization: "Bearer " + driveAccessToken }
+      headers: { Authorization: "Bearer " + driveAccessToken },
+      signal: signal
     });
     if (res.status === 401 || res.status === 403) {
       var err = new Error("auth");
@@ -770,11 +858,11 @@
     return res.json();
   }
 
-  async function fetchAllSharedDrives() {
+  async function fetchAllSharedDrives(signal) {
     var all = [];
     var pageToken = null;
     do {
-      var data = await driveFetchJson(buildSharedDrivesUrl(pageToken));
+      var data = await driveFetchJson(buildSharedDrivesUrl(pageToken), signal);
       var drives = (data && data.drives) || [];
       drives.forEach(function (d) {
         if (d && d.id) {
@@ -807,8 +895,6 @@
     hint.textContent = append ? "Carregando mais…" : (label || "Carregando Drive…");
     setProgress(append ? 40 : 15, true);
     if (!append) {
-      driveList.innerHTML = "";
-      if (!isRootView()) driveListed = [];
       driveNextPageToken = null;
     }
     drivePanel.classList.add("visible");
@@ -834,88 +920,46 @@
   async function loadDriveView(opts) {
     opts = opts || {};
     var append = !!opts.append;
+    var force = !!opts.force;
     if (!driveAccessToken) {
       connectDrive();
       return;
     }
-    if (busy) return;
+    if (busy && append) return;
+    if (busy && drivePanel.classList.contains("visible") && !force) {
+      // Abort in-flight list so navigation can proceed
+      abortDriveListFetch();
+      busy = false;
+    } else if (busy && !force) {
+      return;
+    }
+    if (!append && !force) {
+      var key = driveCacheKey();
+      if (restoreFromCache(key)) {
+        setProgress(0, false);
+        endDriveLoad();
+        return;
+      }
+    }
     if (isRootView()) {
-      await loadRootView({ append: append });
+      await loadRootView({ append: append, force: force });
     } else {
-      await listDriveFolder(driveFolderId, { append: append });
+      await listDriveFolder(driveFolderId, { append: append, force: force });
     }
   }
 
   async function loadRootView(opts) {
     opts = opts || {};
     var append = !!opts.append;
-    beginDriveLoad(append, "Carregando Drive…");
+    var force = !!opts.force;
+    var nav = beginDriveListSignal();
+    var signal = nav.signal;
+    var token = nav.token;
+    var cacheKey = "root";
 
-    try {
-      if (!append) {
-        driveSharedListed = [];
-        driveListed = [];
-        driveNextPageToken = null;
-
-        try {
-          driveSharedListed = await fetchAllSharedDrives();
-        } catch (err) {
-          if (err && err.message === "auth") {
-            handleDriveAuthError();
-            return;
-          }
-          console.error(err);
-          driveSharedListed = [];
-        }
-
-        var folderData;
-        try {
-          folderData = await driveFetchJson(buildFilesListUrl({
-            q: rootFoldersQuery(),
-            pageSize: 100,
-            corpora: "user"
-          }));
-        } catch (err) {
-          if (err && err.message === "auth") {
-            handleDriveAuthError();
-            return;
-          }
-          console.error(err);
-          folderData = { files: [] };
-        }
-
-        var recentData;
-        try {
-          recentData = await driveFetchJson(buildFilesListUrl({
-            q: recentImagesQuery(),
-            pageSize: 50,
-            corpora: "allDrives"
-          }));
-        } catch (err) {
-          if (err && err.message === "auth") {
-            handleDriveAuthError();
-            return;
-          }
-          console.error(err);
-          recentData = { files: [] };
-        }
-
-        var folders = ((folderData && folderData.files) || []).filter(function (f) {
-          return f && f.mimeType === FOLDER_MIME;
-        });
-        var images = ((recentData && recentData.files) || []).filter(function (f) {
-          return f && f.mimeType && String(f.mimeType).indexOf("image/") !== -1;
-        });
-        images.sort(function (a, b) {
-          var at = a.modifiedTime || "";
-          var bt = b.modifiedTime || "";
-          if (at < bt) return 1;
-          if (at > bt) return -1;
-          return 0;
-        });
-        driveListed = folders.concat(images);
-        driveNextPageToken = (recentData && recentData.nextPageToken) || null;
-      } else {
+    if (append) {
+      beginDriveLoad(true, "Carregando mais…");
+      try {
         if (!driveNextPageToken) {
           endDriveLoad();
           setProgress(0, false);
@@ -923,10 +967,11 @@
         }
         var moreData = await driveFetchJson(buildFilesListUrl({
           q: recentImagesQuery(),
-          pageSize: 50,
+          pageSize: RECENT_PAGE_SIZE,
           corpora: "allDrives",
           pageToken: driveNextPageToken
-        }));
+        }), signal);
+        if (isStaleNav(token)) return;
         var seen = {};
         driveListed.forEach(function (f) { if (f && f.id) seen[f.id] = true; });
         ((moreData && moreData.files) || []).forEach(function (f) {
@@ -936,12 +981,87 @@
           }
         });
         driveNextPageToken = (moreData && moreData.nextPageToken) || null;
+        putDriveCache(cacheKey, {
+          listed: driveListed,
+          sharedListed: driveSharedListed,
+          nextPageToken: driveNextPageToken,
+          recentLoaded: true
+        });
+        renderRootDriveList();
+        setProgress(100, true);
+        setTimeout(function () { setProgress(0, false); }, 300);
+      } catch (err) {
+        if (isAbortError(err) || isStaleNav(token)) return;
+        if (err && err.message === "auth") {
+          handleDriveAuthError();
+          return;
+        }
+        console.error(err);
+        hint.textContent = "Erro de rede ao acessar o Drive";
+        setProgress(0, false);
+      } finally {
+        if (!isStaleNav(token)) endDriveLoad();
       }
+      return;
+    }
 
+    beginDriveLoad(false, "Carregando Drive…");
+    try {
+      driveSharedListed = [];
+      driveListed = [];
+      driveNextPageToken = null;
+
+      try {
+        driveSharedListed = await fetchAllSharedDrives(signal);
+      } catch (err) {
+        if (isAbortError(err) || isStaleNav(token)) return;
+        if (err && err.message === "auth") {
+          handleDriveAuthError();
+          return;
+        }
+        console.error(err);
+        driveSharedListed = [];
+      }
+      if (isStaleNav(token)) return;
+
+      var folderData;
+      try {
+        folderData = await driveFetchJson(buildFilesListUrl({
+          q: rootFoldersQuery(),
+          pageSize: 100,
+          corpora: "user"
+        }), signal);
+      } catch (err) {
+        if (isAbortError(err) || isStaleNav(token)) return;
+        if (err && err.message === "auth") {
+          handleDriveAuthError();
+          return;
+        }
+        console.error(err);
+        folderData = { files: [] };
+      }
+      if (isStaleNav(token)) return;
+
+      var folders = ((folderData && folderData.files) || []).filter(function (f) {
+        return f && f.mimeType === FOLDER_MIME;
+      });
+      driveListed = folders.slice();
+      putDriveCache(cacheKey, {
+        listed: driveListed,
+        sharedListed: driveSharedListed,
+        nextPageToken: null,
+        recentLoaded: false
+      });
+
+      // Paint drives + folders first; defer recent images
       renderRootDriveList();
-      setProgress(100, true);
-      setTimeout(function () { setProgress(0, false); }, 300);
+      setProgress(70, true);
+      hint.textContent = "Carregando imagens recentes…";
+      endDriveLoad();
+
+      await loadRootRecentInBackground({ token: token, signal: signal, force: force });
     } catch (err) {
+      if (isAbortError(err) || isStaleNav(token)) return;
       if (err && err.message === "auth") {
         handleDriveAuthError();
         return;
@@ -949,20 +1069,90 @@
       console.error(err);
       hint.textContent = "Erro de rede ao acessar o Drive";
       setProgress(0, false);
-    } finally {
       endDriveLoad();
+    }
+  }
+
+  async function loadRootRecentInBackground(opts) {
+    opts = opts || {};
+    if (!isRootView()) return;
+    var token = opts.token != null ? opts.token : driveNavToken;
+    var signal = opts.signal;
+    if (!signal && driveListAbort) signal = driveListAbort.signal;
+    if (!signal && typeof AbortController !== "undefined") {
+      // attach to current nav without bumping token
+      if (!driveListAbort) driveListAbort = new AbortController();
+      signal = driveListAbort.signal;
+    }
+    try {
+      var recentData = await driveFetchJson(buildFilesListUrl({
+        q: recentImagesQuery(),
+        pageSize: RECENT_PAGE_SIZE,
+        corpora: "allDrives"
+      }), signal);
+      if (isStaleNav(token) || !isRootView()) return;
+
+      var images = ((recentData && recentData.files) || []).filter(function (f) {
+        return f && f.mimeType && String(f.mimeType).indexOf("image/") !== -1;
+      });
+      images.sort(function (a, b) {
+        var at = a.modifiedTime || "";
+        var bt = b.modifiedTime || "";
+        if (at < bt) return 1;
+        if (at > bt) return -1;
+        return 0;
+      });
+
+      var foldersOnly = [];
+      driveListed.forEach(function (f) {
+        if (f && f.mimeType === FOLDER_MIME) foldersOnly.push(f);
+      });
+      driveListed = foldersOnly.concat(images);
+      driveNextPageToken = (recentData && recentData.nextPageToken) || null;
+      putDriveCache("root", {
+        listed: driveListed,
+        sharedListed: driveSharedListed,
+        nextPageToken: driveNextPageToken,
+        recentLoaded: true
+      });
+      renderRootDriveList();
+      setProgress(100, true);
+      setTimeout(function () { setProgress(0, false); }, 300);
+    } catch (err) {
+      if (isAbortError(err) || isStaleNav(token)) return;
+      if (err && err.message === "auth") {
+        handleDriveAuthError();
+        return;
+      }
+      console.error(err);
+      putDriveCache("root", {
+        listed: driveListed,
+        sharedListed: driveSharedListed,
+        nextPageToken: driveNextPageToken,
+        recentLoaded: true
+      });
+      updateDriveHint(
+        driveListed.filter(Boolean),
+        driveSharedListed
+      );
+      setProgress(0, false);
     }
   }
 
   async function listDriveFolder(folderId, opts) {
     opts = opts || {};
     var append = !!opts.append;
+    var nav = beginDriveListSignal();
+    var signal = nav.signal;
+    var token = nav.token;
+    var cacheKey = driveCacheKey();
+
     beginDriveLoad(append, "Carregando pasta…");
 
     var entry = currentStackEntry();
     var listOpts = {
       q: driveChildrenQuery(folderId),
-      pageSize: 100,
+      pageSize: FOLDER_PAGE_SIZE,
       pageToken: append ? driveNextPageToken : null
     };
     if (entry.kind === SHARED_DRIVE_KIND || driveActiveDriveId) {
@@ -976,11 +1166,19 @@
     }
 
     try {
-      var data = await driveFetchJson(buildFilesListUrl(listOpts));
+      var data = await driveFetchJson(buildFilesListUrl(listOpts), signal);
+      if (isStaleNav(token)) return;
       mergeAndRenderDrive(data, append);
+      putDriveCache(cacheKey, {
+        listed: driveListed,
+        sharedListed: [],
+        nextPageToken: driveNextPageToken,
+        recentLoaded: true
+      });
       setProgress(100, true);
       setTimeout(function () { setProgress(0, false); }, 300);
     } catch (err) {
+      if (isAbortError(err) || isStaleNav(token)) return;
       if (err && err.message === "auth") {
         handleDriveAuthError();
         return;
@@ -989,7 +1187,7 @@
       hint.textContent = "Erro ao listar pasta do Drive";
       setProgress(0, false);
     } finally {
-      endDriveLoad();
+      if (!isStaleNav(token)) endDriveLoad();
     }
   }
 
@@ -1058,18 +1256,63 @@
     }
   }
 
-  function appendSection(title) {
+  function appendSection(frag, title) {
     var sec = document.createElement("div");
     sec.className = "drive-section";
     sec.textContent = title;
-    driveList.appendChild(sec);
+    frag.appendChild(sec);
+  }
+
+  function ensureThumbObserver() {
+    if (driveThumbObserver) return driveThumbObserver;
+    if (typeof IntersectionObserver === "undefined") return null;
+    driveThumbObserver = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        var img = entry.target;
+        var src = img.getAttribute("data-src");
+        if (src) {
+          img.src = src;
+          img.removeAttribute("data-src");
+          img.classList.remove("thumb-pending");
+        }
+        driveThumbObserver.unobserve(img);
+      });
+    }, { root: driveList, rootMargin: "120px 0px", threshold: 0.01 });
+    return driveThumbObserver;
+  }
+
+  function makeLazyThumb(url) {
+    var img = document.createElement("img");
+    img.alt = "";
+    img.referrerPolicy = "no-referrer";
+    img.loading = "lazy";
+    img.decoding = "async";
+    img.className = "thumb-pending";
+    img.onerror = function () {
+      var ic = document.createElement("div");
+      ic.className = "drive-icon";
+      ic.textContent = "🖼";
+      if (img.parentNode) img.replaceWith(ic);
+    };
+    var obs = ensureThumbObserver();
+    if (obs) {
+      img.setAttribute("data-src", url);
+      // tiny transparent placeholder keeps layout stable
+      img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+      obs.observe(img);
+    } else {
+      img.src = url;
+      img.classList.remove("thumb-pending");
+    }
+    return img;
   }
 
   function renderDriveList(files, opts) {
     opts = opts || {};
     var sharedDrives = opts.sharedDrives || [];
     var useSections = !!opts.sections;
-    driveList.innerHTML = "";
+    var frag = document.createDocumentFragment();
 
     var folders = [];
     var images = [];
@@ -1081,7 +1324,7 @@
     });
 
     if (sharedDrives.length) {
-      if (useSections) appendSection("Drives compartilhados");
+      if (useSections) appendSection(frag, "Drives compartilhados");
       sharedDrives.forEach(function (d) {
         var btn = document.createElement("button");
         btn.type = "button";
@@ -1097,12 +1340,12 @@
         btn.addEventListener("click", function () {
           enterSharedDrive(d.id, d.name || "Drive compartilhado");
         });
-        driveList.appendChild(btn);
+        frag.appendChild(btn);
       });
     }
 
     if (folders.length) {
-      if (useSections) appendSection("Pastas · Meu Drive");
+      if (useSections) appendSection(frag, "Pastas · Meu Drive");
       folders.forEach(function (f) {
         var btn = document.createElement("button");
         btn.type = "button";
@@ -1118,12 +1361,12 @@
         btn.addEventListener("click", function () {
           enterFolder(f.id, f.name || "Pasta", f.driveId || null);
         });
-        driveList.appendChild(btn);
+        frag.appendChild(btn);
       });
     }
 
     if (images.length) {
-      if (useSections) appendSection(isRootView() ? "Imagens recentes" : "Imagens");
+      if (useSections) appendSection(frag, isRootView() ? "Imagens recentes" : "Imagens");
       images.forEach(function (f) {
         var btn = document.createElement("button");
         btn.type = "button";
@@ -1132,19 +1375,7 @@
         btn.setAttribute("data-id", f.id);
 
         if (f.thumbnailLink) {
-          var img = document.createElement("img");
-          img.alt = "";
-          img.referrerPolicy = "no-referrer";
-          img.src = f.thumbnailLink;
-          img.onerror = function () {
-            img.replaceWith((function () {
-              var ic = document.createElement("div");
-              ic.className = "drive-icon";
-              ic.textContent = "🖼";
-              return ic;
-            })());
-          };
-          btn.appendChild(img);
+          btn.appendChild(makeLazyThumb(f.thumbnailLink));
         } else {
           var icon = document.createElement("div");
           icon.className = "drive-icon";
@@ -1165,9 +1396,12 @@
         btn.addEventListener("click", function () {
           toggleDriveSelect(f, btn, check);
         });
-        driveList.appendChild(btn);
+        frag.appendChild(btn);
       });
     }
+
+    driveList.textContent = "";
+    driveList.appendChild(frag);
   }
 
   function toggleDriveSelect(file, btn, check) {
@@ -1190,18 +1424,26 @@
   }
 
   function enterSharedDrive(id, name) {
-    if (busy) return;
+    abortDriveListFetch();
+    busy = false;
     driveFolderStack.push({ id: id, name: name, kind: SHARED_DRIVE_KIND, driveId: id });
     driveFolderId = id;
     driveActiveDriveId = id;
     driveNextPageToken = null;
     driveListed = [];
     driveSharedListed = [];
+    var key = driveCacheKey();
+    if (restoreFromCache(key)) {
+      setProgress(0, false);
+      endDriveLoad();
+      return;
+    }
     listDriveFolder(id);
   }
 
   function enterFolder(id, name, driveId) {
-    if (busy) return;
+    abortDriveListFetch();
+    busy = false;
     var parent = currentStackEntry();
     var nextDriveId = driveId || parent.driveId || driveActiveDriveId || null;
     driveFolderStack.push({
@@ -1214,11 +1456,19 @@
     if (nextDriveId) driveActiveDriveId = nextDriveId;
     driveNextPageToken = null;
     driveListed = [];
+    var key = driveCacheKey();
+    if (restoreFromCache(key)) {
+      setProgress(0, false);
+      endDriveLoad();
+      return;
+    }
     listDriveFolder(id);
   }
 
   function goBackFolder() {
-    if (busy || driveFolderStack.length <= 1) return;
+    if (driveFolderStack.length <= 1) return;
+    abortDriveListFetch();
+    busy = false;
     driveFolderStack.pop();
     var current = currentStackEntry();
     driveFolderId = current.id;
@@ -1227,7 +1477,13 @@
     driveNextPageToken = null;
     driveListed = [];
     driveSharedListed = [];
-    loadDriveView();
+    var key = driveCacheKey(current);
+    if (restoreFromCache(key)) {
+      setProgress(0, false);
+      endDriveLoad();
+      return;
+    }
+    loadDriveView({ force: true });
   }
 
   function loadMoreDrive() {
