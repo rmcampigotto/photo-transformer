@@ -1,0 +1,22 @@
+services:
+  photo-transformer:
+    build: .
+    image: photo-transformer-service:latest
+    container_name: photo-transformer-service
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"
+    env_file:
+      - .env
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8080"
+    volumes:
+      # Monte o JSON da service account (não versione o arquivo)
+      - ${GOOGLE_SA_HOST_PATH:-./credentials/google-sa.json}:/run/secrets/google-sa.json:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

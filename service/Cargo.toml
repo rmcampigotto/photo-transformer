@@ -1,0 +1,31 @@
+[package]
+name = "photo-transformer-service"
+version = "0.1.0"
+edition = "2021"
+description = "Drive → resize 1200×1200 → Bling v3 microservice"
+license = "MIT"
+
+[dependencies]
+axum = { version = "0.8", features = ["multipart"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dotenvy = "0.15"
+thiserror = "2"
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+base64 = "0.22"
+jsonwebtoken = "9"
+uuid = { version = "1", features = ["v4", "serde"] }
+parking_lot = "0.12"
+bytes = "1"
+urlencoding = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1

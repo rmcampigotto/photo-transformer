@@ -1,0 +1,9 @@
+/target
+.env
+*.json
+!Cargo.toml
+data/
+*.pem
+credentials/
+sa-*.json
+service-account*.json
